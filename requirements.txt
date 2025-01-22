@@ -1,0 +1,7 @@
+opencv-python
+pywin32
+Pillow
+torch
+torchaudio
+torchvision
+xformers
