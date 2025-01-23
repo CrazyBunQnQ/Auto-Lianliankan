@@ -13,8 +13,8 @@ def canConnect(x1,y1,x2,y2,r):
     # 将传入的二维数组赋值给本地全局变量，
     global result
     result = r
-    # 如果有一个为0 直接返回False
-    if result[x1][y1] == 0 or result[x2][y2] == 0:
+    # 如果其中一个是空白(0) 或障碍(1)，都不能连接
+    if result[x1][y1] < 2 or result[x2][y2] < 2:
         return False
     if x1 == x2 and y1 == y2 :
         return False

@@ -1,6 +1,7 @@
 opencv-python
 pywin32
 Pillow
+keyboard
 torch
 torchaudio
 torchvision

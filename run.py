@@ -13,7 +13,10 @@ import time
 from config import *
 from scipy.spatial.distance import cosine
 import shutil
+import keyboard
+import threading
 
+# ============== ① 保持模型加载在最前，只加载一次 ==============
 # 加载预训练的ResNet模型
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = models.resnet18(pretrained=True)
@@ -137,6 +140,7 @@ def getAllSquareTypes(all_square):
     # 先把空白添加到数组中，作为0号
     empty_img = cv2.imread('empty.png')
     types.append(empty_img)
+
     for square in all_square:
         # 如果这个图像不存在的话将图像保存起来
         if not isImageExist(square,types):
@@ -150,21 +154,37 @@ def getAllSquareTypes(all_square):
 # 将所有的方块与类型进行比较，转置成数字
 def getAllSquareRecord(all_square_list,types):
     print("将所有的方块与类型进行比较，转置成数字矩阵...")
+
+    # ① 读取所有 blockN.png 障碍图片
+    block_imgs = []
+    for filename in os.listdir("."):
+        # 根据自己实际放置的路径来调整，这里假设 block 图片都放在同级目录
+        if filename.startswith("block") and filename.endswith(".png"):
+            block_path = os.path.join(".", filename)
+            block_imgs.append(cv2.imread(block_path))
+
     record = []  # 整个记录的二维数组
     line = []   # 记录一行
     for square in all_square_list:   # 把所有的方块和保存起来的所有类型做对比
-        num = 0
-        for type in types:    # 所有类型
-            # 判断完全一样
-            # res = cv2.subtract(square,type) # 作比较
-            # if not np.any(res):     # 如果两个图片一样
-            # 使用模糊判断是否匹配，能够容忍微笑的错位及颜色变化
-            if are_images_similar(square, type):
-                line.append(num)    # 将类型的数字记录进这一行
-                break               # 并且跳出循环
-            num += 1                # 如果没有匹配上，则类型数加1
+        # ② 先判断该 square 是否是障碍方块
+        if isImageExist(square, block_imgs):
+            # 障碍记为 1
+            line.append(1)
+        else:
+            # ③ 否则按照原逻辑跟 types 做相似度比对
+            num = 0
+            for type in types:    # 所有类型
+                # 判断完全一样
+                # res = cv2.subtract(square,type) # 作比较
+                # if not np.any(res):     # 如果两个图片一样
+                # 使用模糊判断是否匹配，能够容忍微笑的错位及颜色变化
+                if are_images_similar(square, type):
+                    line.append(num)    # 将类型的数字记录进这一行
+                    break               # 并且跳出循环
+                num += 1                # 如果没有匹配上，则类型数加1
 
-        if len(line) == V_NUM:         # 如果校验完这一行已经有了11个数据，则另起一行
+        # 如果校验完这一行已经有了 V_NUM 个数据，则另起一行
+        if len(line) == V_NUM:         
             record.append(line)
             line = []
     print(record)
@@ -214,27 +234,100 @@ def autoRemove(squares,game_pos):
         autoRelease(squares,game_x,game_y)
 
 
-if __name__ == '__main__':
-    # 1、定位游戏窗体
+# 用于控制是否中断当前流程
+stop_event = threading.Event()
+current_thread = None
+
+# 自动连连看
+def auto_play_lianliankan():
+    """
+    每次按下 F10 后，执行自动连连看的一次完整流程：
+    1. 定位窗体
+    2. 截图识别
+    3. 自动消除
+    （支持被 stop_event 打断）
+    """
+    # 可能上一次残留的 stop_event 还在 set 状态，先清一下
+    stop_event.clear()
+
+    print("开始执行自动连连看流程...")
+    # 1. 定位游戏窗体
     game_pos = getGameWindowPosition()
-    time.sleep(1)
+    if stop_event.is_set():
+        print("检测到中断，退出流程。")
+        return
+
     # 2、从屏幕截图一张，通过opencv读取
     screen_image = getScreenImage()
+    if stop_event.is_set():
+        print("检测到中断，退出流程。")
+        return
+
     # 3、图像切片，把截图中的连连看切成一个一个的小方块，保存在一个数组中
-    all_square_list = getAllSquare(screen_image,game_pos)
+    all_square_list = getAllSquare(screen_image, game_pos)
     # 4、切片处理后的图片，相同的作为一种类型，放在数组中。
     types = getAllSquareTypes(all_square_list)
     # 5、将切片处理后的图片，转换成相对应的数字矩阵。注意 拿到的数组是横纵逆向的，转置一下。
-    result = np.transpose(getAllSquareRecord(all_square_list,types))
+    result = np.transpose(getAllSquareRecord(all_square_list, types))
+
     # 6、执行自动消除
-    autoRemove(result,game_pos)
-    # 7、消除完成，释放资源。
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    print("开始自动消除...")
+    # 这里是个简单循环，您原逻辑可能是 for i in range(105)...
+    # 在循环里每消除一对，需要判定 stop_event 是否被 set
+    for i in range(105):
+        if stop_event.is_set():
+            print("中断自动连连看流程!")
+            return
+        changed = autoRelease(result, game_pos[0] + MARGIN_LEFT, game_pos[1] + MARGIN_HEIGHT)
+        if not changed:
+            # 已无可消除时就结束
+            print("目前无可消除，可能已通关或需等待刷新。")
+            break
 
+    print("本轮连连看自动消除完成。")
 
+# 设置 F10 热键
+def on_f10_pressed():
+    global current_thread, stop_event
 
+    # 如果当前线程还在运行，先打断
+    if current_thread and current_thread.is_alive():
+        print("检测到再次按 F10：中断上一次执行，准备重新开始...")
+        stop_event.set()  # 告诉上一个流程「请停下」
+        # 等待上一轮线程结束，或者也可以不等，直接开新线程
+        # 这里做简单等待
+        current_thread.join(timeout=1)
 
+    # 启动新一次自动连连看
+    current_thread = threading.Thread(target=auto_play_lianliankan)
+    current_thread.daemon = True
+    current_thread.start()
 
+# 在 main 区域增加对 F10 的监听
+keyboard.add_hotkey('F10', on_f10_pressed)
 
+if __name__ == '__main__':
+    # # 1、定位游戏窗体
+    # game_pos = getGameWindowPosition()
+    # time.sleep(1)
+    # # 2、从屏幕截图一张，通过opencv读取
+    # screen_image = getScreenImage()
+    # # 3、图像切片，把截图中的连连看切成一个一个的小方块，保存在一个数组中
+    # all_square_list = getAllSquare(screen_image,game_pos)
+    # # 4、切片处理后的图片，相同的作为一种类型，放在数组中。
+    # types = getAllSquareTypes(all_square_list)
+    # # 5、将切片处理后的图片，转换成相对应的数字矩阵。注意 拿到的数组是横纵逆向的，转置一下。
+    # result = np.transpose(getAllSquareRecord(all_square_list,types))
+    # # 6、执行自动消除
+    # autoRemove(result,game_pos)
+    # # 7、消除完成，释放资源。
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+    print("程序已启动，模型已加载。按 F10 开始自动连连看，重复按 F10 可打断并重新开始。")
 
+    # 主线程保持等待
+    try:
+        while True:
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        print("收到 Ctrl+C，程序退出。")

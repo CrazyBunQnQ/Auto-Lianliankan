@@ -51,3 +51,11 @@ Temporary Items
 screen.png
 __pycache__/
 
+test*.py
+test
+temp
+build
+dist
+output
+*.spec
+slice
